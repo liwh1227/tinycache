@@ -1,7 +1,8 @@
-package core
+package tinycache
 
 import (
 	"errors"
+	"sync"
 	"time"
 )
 
@@ -35,6 +36,7 @@ type Cache[T any] struct {
 	shards    []*shard[T]
 	shardMask uint64 // 用于位运算路由：hash & mask
 	closed    chan struct{}
+	closeOnce sync.Once
 }
 
 // New 创建缓存实例
@@ -136,7 +138,9 @@ func (c *Cache[T]) Stats() CacheStats {
 
 // Close 关闭缓存，停止后台清理协程
 func (c *Cache[T]) Close() {
-	close(c.closed)
+	c.closeOnce.Do(func() {
+		close(c.closed)
+	})
 }
 
 // cleanLoop 后台定时清理过期条目
