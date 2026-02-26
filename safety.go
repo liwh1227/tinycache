@@ -1,4 +1,4 @@
-package core
+package tinycache
 
 import (
 	"fmt"
@@ -13,22 +13,14 @@ import (
 // 包含指针的类型（即使是间接的）：
 //   - string（底层 StringHeader 含 Data 指针）
 //   - slice（底层 SliceHeader 含 Data 指针）
-//   - map、chan、func、interface、*T
+//   - map、chan、func、interface、*T、unsafe.Pointer
 //
 // 不包含指针的类型：
 //   - int/uint/float/complex/bool 系列
 //   - [N]int 等固定长度数组（元素也必须无指针）
 //   - struct（所有字段都必须无指针）
 func assertNoPointers[T any]() {
-	//var zero T
-	//t := reflect.TypeOf(zero)
-
 	t := reflect.TypeOf((*T)(nil)).Elem()
-
-	// T 是 interface 或 nil 时的特殊处理
-	//if t == nil {
-	//	panic("tinycache: type parameter T must be a concrete type, not interface or nil")
-	//}
 
 	if path := findPointerField(t, ""); path != "" {
 		panic(fmt.Sprintf(

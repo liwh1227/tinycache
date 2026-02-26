@@ -1,4 +1,4 @@
-package core
+package tinycache
 
 import (
 	"sync"
@@ -29,6 +29,7 @@ type shard[T any] struct {
 	index    map[uint64]uint32
 	data     []slot[T]
 	freeList []uint32
+	_        [64]byte // 防止伪共享的发生
 }
 
 func newShard[T any](initCap int) *shard[T] {
@@ -86,9 +87,8 @@ func (s *shard[T]) set(keyHash uint64, value T, ttl time.Duration) {
 // 流程：
 //  1. 从 index 查找下标，不存在返回 ErrNotFound
 //  2. 通过下标从 data 中读取 slot
-//  3. 校验 keyHash 是否一致（防冲突覆盖后读到错误数据）
-//  4. 检查是否过期
-//  5. 返回 data 的值拷贝（读锁释放后调用方持有的是独立副本，无并发风险）
+//  3. 检查是否过期
+//  4. 返回 data 的值拷贝（读锁释放后调用方持有的是独立副本，无并发风险）
 func (s *shard[T]) get(keyHash uint64) (T, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -101,13 +101,6 @@ func (s *shard[T]) get(keyHash uint64) (T, error) {
 
 	entry := s.data[idx]
 
-	// 哈希冲突校验：如果 slot 中记录的 keyHash 与查询的不一致，
-	// 说明该槽位已被另一个 key 覆盖
-	if entry.keyHash != keyHash {
-		var zero T
-		return zero, ErrNotFound
-	}
-
 	// 过期检查（惰性判定，不在读路径加写锁清理）
 	if entry.expireAt > 0 && time.Now().UnixNano() > entry.expireAt {
 		var zero T
@@ -119,7 +112,6 @@ func (s *shard[T]) get(keyHash uint64) (T, error) {
 
 // del 删除条目，将槽位回收到 freeList
 //
-// 精髓：不做物理内存释放，而是将槽位下标压入 freeList，
 // 下次 set 时优先从 freeList 取用，实现内存复用。
 func (s *shard[T]) del(keyHash uint64) {
 	s.mu.Lock()
@@ -134,13 +126,14 @@ func (s *shard[T]) del(keyHash uint64) {
 	delete(s.index, keyHash)
 
 	// 清零 slot，防止持有过期的业务数据引用
-	// （虽然 T 不含指针，清零仍是好习惯，避免数据残留被误读）
 	var zeroSlot slot[T]
 	s.data[idx] = zeroSlot
 
 	// 将下标归还给 freeList
 	s.freeList = append(s.freeList, idx)
 }
+
+const maxCleanPerRun = 100
 
 // cleanExpired 扫描 index，清理所有过期条目并回收槽位
 func (s *shard[T]) cleanExpired() {
@@ -149,16 +142,21 @@ func (s *shard[T]) cleanExpired() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	count := 0
 	for keyHash, idx := range s.index {
+		// 防止条目过多陷入长时间的阻塞
+		if count >= maxCleanPerRun {
+			break
+		}
+
 		entry := s.data[idx]
 		if entry.expireAt > 0 && now > entry.expireAt {
 			delete(s.index, keyHash)
-
 			var zeroSlot slot[T]
 			s.data[idx] = zeroSlot
-
 			s.freeList = append(s.freeList, idx)
 		}
+		count++
 	}
 }
 

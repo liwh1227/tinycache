@@ -1,4 +1,4 @@
-package core
+package tinycache
 
 // FNV-1a 哈希常量
 // 参考: https://en.wikipedia.org/wiki/Fowler–Noll–Vo_hash_function#FNV-1a_hash

@@ -2,6 +2,7 @@ package tinycache
 
 import (
 	"errors"
+	"runtime"
 	"sync"
 	"time"
 )
@@ -12,7 +13,7 @@ var (
 )
 
 const (
-	defaultShardCount    = 16
+	defaultShardCount    = 256
 	defaultInitShardSize = 256
 )
 
@@ -120,6 +121,8 @@ func (c *Cache[T]) Len() int {
 func (c *Cache[T]) CleanExpired() {
 	for _, s := range c.shards {
 		s.cleanExpired()
+		// 防止分片过多导致的cpu尖刺问题
+		runtime.Gosched()
 	}
 }
 
@@ -177,6 +180,7 @@ func nextPowerOf2(n int) int {
 	n |= n >> 4
 	n |= n >> 8
 	n |= n >> 16
+	n |= n >> 32
 	n++
 	return n
 }
